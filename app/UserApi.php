@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 require 'vendor/autoload.php';
 
-include 'Api.php';
-include 'Database.php';
-include 'User.php';
+require_once('Api.php');
+require_once('Database.php');
+require_once('Models/User.php');
+require_once('Services/CacheService.php');
 
 use Api\Api;
 use Api\Database;
-use Api\User;
-use \Firebase\JWT\JWT;
-use \Firebase\JWT\JWK;
+use Api\Models\User;
 use Dotenv\Dotenv;
-use Firebase\JWT\Key;
+use Firebase\JWT\JWT;
+use Api\Services\CacheService;
 
 class UserApi extends Api
 {
@@ -27,7 +27,7 @@ class UserApi extends Api
         $city = $this->postRequest['city'] ?? '';
         $password = $this->postRequest['password'] ?? '';
 
-        if($name && $password){
+        if ($name && $password) {
             $pdo = (new Database())->getConnection();
 
             $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
@@ -45,13 +45,13 @@ class UserApi extends Api
 
         if (empty($name) || empty($password)) {
             return $this->response(['message' => 'Username and password are required.'], 422);
-            return;
         }
 
         return $this->response("Saving error", 500);
     }
 
-    public function login(){
+    public function login()
+    {
         $userId = $this->postRequest['user_id'] ?? '';
         $password = $this->postRequest['password'] ?? '';
 
@@ -68,7 +68,7 @@ class UserApi extends Api
             $payload = [
                 'iat' => time(),
                 'exp' => time() + (60 * 60),
-                'id' => $user['id']
+                'id' => $user['id'],
             ];
 
             $dotenv = Dotenv::createImmutable(__DIR__);
@@ -84,24 +84,9 @@ class UserApi extends Api
         }
     }
 
-    public function getUser($request) {
-        //todo перенести в класс Api
-        $dotenv = Dotenv::createImmutable(__DIR__);
-        $dotenv->load();
-
-        $secretKey = $_ENV['JWT_SECRET'];
-
-        $jwt = $this->getBearerToken();
-
-        if ($jwt) {
-            try {
-                $decoded = JWT::decode($this->getBearerToken(), new Key($secretKey, 'HS256'));
-            } catch (\Exception $e) {
-                return $this->response(['message' => 'Invalid token'], 403);
-            }
-        } else {
-            return $this->response(['message' => 'Token is missing'], 422);
-        }
+    public function getUser($request)
+    {
+        $this->checkAuth();
 
         $userId = $request['id'] ?? '';
 
@@ -111,7 +96,7 @@ class UserApi extends Api
         $stmt->execute([$userId]);
         $rowUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if(empty($rowUser)) {
+        if (empty($rowUser)) {
             return $this->response('User not found', 404);
         }
 
@@ -136,22 +121,7 @@ class UserApi extends Api
             return $this->response(['message' => 'first_name and last_name are required'], 422);
         }
 
-        $dotenv = Dotenv::createImmutable(__DIR__);
-        $dotenv->load();
-
-        $secretKey = $_ENV['JWT_SECRET'];
-
-        $jwt = $this->getBearerToken();
-
-        if ($jwt) {
-            try {
-                $decoded = JWT::decode($this->getBearerToken(), new Key($secretKey, 'HS256'));
-            } catch (\Exception $e) {
-                return $this->response(['message' => 'Invalid token'], 403);
-            }
-        } else {
-            return $this->response(['message' => 'Token is missing'], 422);
-        }
+        $this->checkAuth();
 
         $pdo = (new Database())->getConnection();
 
@@ -176,5 +146,78 @@ class UserApi extends Api
         }
 
         return $this->response($users, 200);
+    }
+
+    public function addFriend($request) {
+        $decoded = $this->checkAuth();
+
+        $userId = $decoded->id;
+        $friendId = $request['id'];
+
+        $pdo = (new Database())->getConnection();
+
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt->execute([$friendId]);
+        $existedFriend = $stmt->fetch(PDO::FETCH_ASSOC) ? true : false;
+
+        if (!$existedFriend) {
+            return $this->response('Friend does not exist', 404);
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM friends WHERE user_id = ? AND friend_id = ?");
+        $stmt->execute([$userId, $friendId]);
+        $isFriend = $stmt->fetch(PDO::FETCH_ASSOC) ? true : false;
+
+        if ($isFriend) {
+            return $this->response('Friend already exists', 404);
+        }
+
+        $stmt = $pdo->prepare("INSERT INTO friends(user_id, friend_id) VALUES (?, ?)");
+
+        if ($stmt->execute([$userId, $friendId])) {
+            $cacheService = new CacheService();
+            $cacheService->updateUserPostFeed($userId);
+
+            return $this->response('Friend is added successfully', 200);
+        } else {
+            return $this->response('Failed to add a friend', 500);
+        }
+    }
+
+    public function removeFriend($request) {
+
+        $decoded = $this->checkAuth();
+
+        $userId = $decoded->id;
+        $friendId = $request['id'];
+
+        $pdo = (new Database())->getConnection();
+
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt->execute([$friendId]);
+        $existedFriend = $stmt->fetch(PDO::FETCH_ASSOC) ? true : false;
+
+        if (!$existedFriend) {
+            return $this->response('Friend does not exist', 404);
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM friends WHERE user_id = ? AND friend_id = ?");
+        $stmt->execute([$userId, $friendId]);
+        $isFriend = $stmt->fetch(PDO::FETCH_ASSOC) ? true : false;
+
+        if (!$isFriend) {
+            return $this->response('This is not your friend', 404);
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM friends WHERE user_id = ? AND friend_id = ?");
+
+        if ($stmt->execute([$userId, $friendId])) {
+            $cacheService = new CacheService();
+            $cacheService->updateUserPostFeed($userId);
+
+            return $this->response('Friend is deleted successfully', 200);
+        } else {
+            return $this->response('Failed to remove a friend', 500);
+        }
     }
 }

@@ -8,6 +8,7 @@ services:
       - pgnet
     volumes:
       - ./app:/var/www/html
+      - ./docker/php/php.ini:/usr/local/etc/php/php.ini
 
   nginx:
     image: nginx:latest
@@ -33,6 +34,14 @@ services:
     volumes:
       - ./volumes/pgmaster/:/var/lib/postgresql/data
       - my-vol:/var/lib/postgresql/data
+
+  redis:
+    container_name: "redis"
+    image: redis:7.2.3
+    networks:
+      - pgnet
+    ports:
+      - 6380:6379
 
 volumes:
   my-vol:

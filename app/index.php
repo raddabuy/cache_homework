@@ -1,10 +1,12 @@
 <?php
 declare(strict_types=1);
 
-include 'UserApi.php';
- 
+require 'vendor/autoload.php';
+
+include 'Router.php';
+
 try {
-    $api = new UserApi();
+    $api = new Router();
     echo $api->run();
 } catch (Exception $e) {
     echo json_encode(Array('error' => $e->getMessage()));
